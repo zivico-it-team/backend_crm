@@ -1,13 +1,15 @@
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 
-const toPublicUser = (u) => {
-  if (!u) return null;
-  const obj = typeof u.toJSON === "function" ? u.toJSON() : u;
-  obj._id = obj.id;
-  delete obj.password;
-  return obj;
-};
+const {
+  serializeUser,
+  serializeUsers,
+  createUserWithRelations,
+  updateUserWithRelations,
+  findUserByPkWithRelations,
+  findOneUserWithRelations,
+  findAllUsersWithRelations,
+} = require("../services/userService");
 
 const extractProfessional = (payload = {}, existingProfessional = {}) => {
   const professionalPayload = payload.professional || {};
@@ -46,83 +48,104 @@ const handleAdminUserError = (res, err) => {
   return res.status(500).json({ message: err.message || "Server error" });
 };
 
-// Admin → Add Manager
+const buildCreatePayload = async (req, role) => ({
+  name: req.body.name,
+  email: req.body.email,
+  phone: req.body.phone,
+  userName: req.body.userName,
+  password: await bcrypt.hash(req.body.password, 10),
+  role,
+  professional: extractProfessional(req.body),
+  emergencyContact: req.body.emergencyContact || {},
+  bank: req.body.bank || {},
+  documents: req.body.documents || [],
+  profileImageUrl: req.body.profileImageUrl || "",
+  profileImageFileName: req.body.profileImageFileName || "",
+  dob: req.body.dob || null,
+  gender: req.body.gender || "Not specified",
+  nationality: req.body.nationality || "",
+  addressLine: req.body.addressLine || "",
+  city: req.body.city || "",
+  state: req.body.state || "",
+  postalCode: req.body.postalCode || "",
+  bio: req.body.bio || "",
+  skills: req.body.skills || [],
+});
+
+const buildUpdatePayload = async (req, existingUser) => {
+  const allowed = [
+    "name",
+    "userName",
+    "email",
+    "phone",
+    "dob",
+    "gender",
+    "nationality",
+    "addressLine",
+    "city",
+    "state",
+    "postalCode",
+    "documents",
+    "profileImageUrl",
+    "profileImageFileName",
+    "bio",
+    "skills",
+  ];
+
+  const update = {};
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) update[key] = req.body[key];
+  }
+
+  if (
+    req.body.professional !== undefined ||
+    req.body.employeeId !== undefined ||
+    req.body.designation !== undefined ||
+    req.body.department !== undefined
+  ) {
+    update.professional = extractProfessional(req.body, existingUser.professional || {});
+  }
+
+  if (req.body.bank !== undefined) update.bank = req.body.bank || {};
+  if (req.body.emergencyContact !== undefined) update.emergencyContact = req.body.emergencyContact || {};
+
+  if (req.body.password && String(req.body.password).trim()) {
+    update.password = await bcrypt.hash(req.body.password, 10);
+  }
+
+  return update;
+};
+
+const requireUserByRole = (id, roleName) =>
+  findOneUserWithRelations({ where: { id }, roleNames: roleName });
+
+// Admin -> Add Manager
 const addManager = async (req, res) => {
   try {
-    const { name, userName, email, password, phone } = req.body;
+    const { name, userName, email, password } = req.body;
 
     if (!name || !userName || !email || !password) {
       return res.status(400).json({ message: "name, userName, email and password are required" });
     }
 
-    const hashed = await bcrypt.hash(password, 10);
-
-    const manager = await User.create({
-      name,
-      email,
-      phone,
-      userName,
-      password: hashed,
-      role: "manager",
-      professional: extractProfessional(req.body),
-      emergencyContact: req.body.emergencyContact || {},
-      bank: req.body.bank || {},
-      documents: req.body.documents || [],
-      profileImageUrl: req.body.profileImageUrl || "",
-      profileImageFileName: req.body.profileImageFileName || "",
-      dob: req.body.dob || null,
-      gender: req.body.gender || "Not specified",
-      nationality: req.body.nationality || "",
-      addressLine: req.body.addressLine || "",
-      city: req.body.city || "",
-      state: req.body.state || "",
-      postalCode: req.body.postalCode || "",
-      bio: req.body.bio || "",
-      skills: req.body.skills || [],
-    });
-
-    res.status(201).json(toPublicUser(manager));
+    const manager = await createUserWithRelations(await buildCreatePayload(req, "manager"));
+    res.status(201).json(serializeUser(manager));
   } catch (err) {
     return handleAdminUserError(res, err);
   }
 };
 
-// Admin + Manager → Add Employee
+// Admin + Manager -> Add Employee
 const addEmployee = async (req, res) => {
   try {
-    const { name, userName, email, password, phone } = req.body;
+    const { name, userName, email, password } = req.body;
 
     if (!name || !userName || !email || !password) {
       return res.status(400).json({ message: "name, userName, email and password are required" });
     }
 
-    const hashed = await bcrypt.hash(password, 10);
-
-    const employee = await User.create({
-      name,
-      email,
-      phone,
-      userName,
-      password: hashed,
-      role: "employee",
-      professional: extractProfessional(req.body),
-      emergencyContact: req.body.emergencyContact || {},
-      bank: req.body.bank || {},
-      documents: req.body.documents || [],
-      profileImageUrl: req.body.profileImageUrl || "",
-      profileImageFileName: req.body.profileImageFileName || "",
-      dob: req.body.dob || null,
-      gender: req.body.gender || "Not specified",
-      nationality: req.body.nationality || "",
-      addressLine: req.body.addressLine || "",
-      city: req.body.city || "",
-      state: req.body.state || "",
-      postalCode: req.body.postalCode || "",
-      bio: req.body.bio || "",
-      skills: req.body.skills || [],
-    });
-
-    res.status(201).json(toPublicUser(employee));
+    const employee = await createUserWithRelations(await buildCreatePayload(req, "employee"));
+    res.status(201).json(serializeUser(employee));
   } catch (err) {
     return handleAdminUserError(res, err);
   }
@@ -131,13 +154,12 @@ const addEmployee = async (req, res) => {
 // GET all managers
 const getManagers = async (req, res) => {
   try {
-    const managers = await User.findAll({
-      where: { role: "manager" },
-      attributes: { exclude: ["password"] },
+    const managers = await findAllUsersWithRelations({
+      roleNames: "manager",
       order: [["createdAt", "DESC"]],
     });
 
-    res.json(managers.map(toPublicUser));
+    res.json(serializeUsers(managers));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -146,13 +168,10 @@ const getManagers = async (req, res) => {
 // GET single manager by id
 const getManagerById = async (req, res) => {
   try {
-    const manager = await User.findOne({
-      where: { id: req.params.id, role: "manager" },
-      attributes: { exclude: ["password"] },
-    });
+    const manager = await requireUserByRole(req.params.id, "manager");
 
     if (!manager) return res.status(404).json({ message: "Manager not found" });
-    res.json(toPublicUser(manager));
+    res.json(serializeUser(manager));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -163,57 +182,15 @@ const updateManager = async (req, res) => {
   try {
     const id = req.params.id;
 
-    const allowed = [
-      "name",
-      "userName",
-      "email",
-      "phone",
-      "dob",
-      "gender",
-      "nationality",
-      "addressLine",
-      "city",
-      "state",
-      "postalCode",
-      "professional",
-      "bank",
-      "documents",
-      "emergencyContact",
-      "profileImageUrl",
-      "profileImageFileName",
-      "bio",
-      "skills",
-    ];
-
     if (req.body.role && req.body.role !== "manager") {
       return res.status(400).json({ message: "Role change not allowed here" });
     }
 
-    const manager = await User.findOne({ where: { id, role: "manager" } });
+    const manager = await requireUserByRole(id, "manager");
     if (!manager) return res.status(404).json({ message: "Manager not found" });
 
-    const update = {};
-    for (const key of allowed) {
-      if (req.body[key] !== undefined) update[key] = req.body[key];
-    }
-
-    if (
-      req.body.professional !== undefined ||
-      req.body.employeeId !== undefined ||
-      req.body.designation !== undefined ||
-      req.body.department !== undefined
-    ) {
-      update.professional = extractProfessional(req.body, manager.professional || {});
-    }
-
-    if (req.body.password && String(req.body.password).trim()) {
-      update.password = await bcrypt.hash(req.body.password, 10);
-    }
-
-    await manager.update(update);
-
-    const updated = await User.findByPk(id, { attributes: { exclude: ["password"] } });
-    res.json(toPublicUser(updated));
+    const updated = await updateUserWithRelations(id, await buildUpdatePayload(req, serializeUser(manager)));
+    res.json(serializeUser(updated));
   } catch (err) {
     return handleAdminUserError(res, err);
   }
@@ -228,9 +205,10 @@ const deleteManager = async (req, res) => {
       return res.status(400).json({ message: "You can't delete your own account" });
     }
 
-    const deleted = await User.destroy({ where: { id, role: "manager" } });
-    if (!deleted) return res.status(404).json({ message: "Manager not found" });
+    const manager = await requireUserByRole(id, "manager");
+    if (!manager) return res.status(404).json({ message: "Manager not found" });
 
+    await manager.destroy();
     res.json({ message: "Manager deleted successfully" });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -240,12 +218,11 @@ const deleteManager = async (req, res) => {
 // GET all employees
 const getEmployees = async (req, res) => {
   try {
-    const employees = await User.findAll({
-      where: { role: "employee" },
-      attributes: { exclude: ["password"] },
+    const employees = await findAllUsersWithRelations({
+      roleNames: "employee",
       order: [["createdAt", "DESC"]],
     });
-    res.json(employees.map(toPublicUser));
+    res.json(serializeUsers(employees));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -254,12 +231,9 @@ const getEmployees = async (req, res) => {
 // GET single employee by id
 const getEmployeeById = async (req, res) => {
   try {
-    const employee = await User.findOne({
-      where: { id: req.params.id, role: "employee" },
-      attributes: { exclude: ["password"] },
-    });
+    const employee = await requireUserByRole(req.params.id, "employee");
     if (!employee) return res.status(404).json({ message: "Employee not found" });
-    res.json(toPublicUser(employee));
+    res.json(serializeUser(employee));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -270,57 +244,15 @@ const updateEmployee = async (req, res) => {
   try {
     const id = req.params.id;
 
-    const allowed = [
-      "name",
-      "userName",
-      "email",
-      "phone",
-      "dob",
-      "gender",
-      "nationality",
-      "addressLine",
-      "city",
-      "state",
-      "postalCode",
-      "professional",
-      "bank",
-      "documents",
-      "emergencyContact",
-      "profileImageUrl",
-      "profileImageFileName",
-      "bio",
-      "skills",
-    ];
-
     if (req.body.role && req.body.role !== "employee") {
       return res.status(400).json({ message: "Role change not allowed here" });
     }
 
-    const employee = await User.findOne({ where: { id, role: "employee" } });
+    const employee = await requireUserByRole(id, "employee");
     if (!employee) return res.status(404).json({ message: "Employee not found" });
 
-    const update = {};
-    for (const key of allowed) {
-      if (req.body[key] !== undefined) update[key] = req.body[key];
-    }
-
-    if (
-      req.body.professional !== undefined ||
-      req.body.employeeId !== undefined ||
-      req.body.designation !== undefined ||
-      req.body.department !== undefined
-    ) {
-      update.professional = extractProfessional(req.body, employee.professional || {});
-    }
-
-    if (req.body.password && String(req.body.password).trim()) {
-      update.password = await bcrypt.hash(req.body.password, 10);
-    }
-
-    await employee.update(update);
-
-    const updated = await User.findByPk(id, { attributes: { exclude: ["password"] } });
-    res.json(toPublicUser(updated));
+    const updated = await updateUserWithRelations(id, await buildUpdatePayload(req, serializeUser(employee)));
+    res.json(serializeUser(updated));
   } catch (err) {
     return handleAdminUserError(res, err);
   }
@@ -335,9 +267,10 @@ const deleteEmployee = async (req, res) => {
       return res.status(400).json({ message: "You can't delete your own account" });
     }
 
-    const deleted = await User.destroy({ where: { id, role: "employee" } });
-    if (!deleted) return res.status(404).json({ message: "Employee not found" });
+    const employee = await requireUserByRole(id, "employee");
+    if (!employee) return res.status(404).json({ message: "Employee not found" });
 
+    await employee.destroy();
     res.json({ message: "Employee deleted successfully" });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -347,10 +280,12 @@ const deleteEmployee = async (req, res) => {
 // GET admin profile (Admin only)
 const getAdminProfile = async (req, res) => {
   try {
-    const admin = await User.findByPk(req.user._id, { attributes: { exclude: ["password"] } });
+    const admin = await findUserByPkWithRelations(req.user._id);
+
     if (!admin) return res.status(404).json({ message: "Admin not found" });
-    if (admin.role !== "admin") return res.status(403).json({ message: "Admin only" });
-    res.json({ user: toPublicUser(admin) });
+    const adminData = serializeUser(admin);
+    if (adminData.role !== "admin") return res.status(403).json({ message: "Admin only" });
+    res.json({ user: adminData });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -359,41 +294,33 @@ const getAdminProfile = async (req, res) => {
 // UPDATE admin profile (Admin only)
 const updateAdminProfile = async (req, res) => {
   try {
-    const adminId = req.user._id;
+    const admin = await findUserByPkWithRelations(req.user._id);
 
-    const admin = await User.findByPk(adminId);
     if (!admin) return res.status(404).json({ message: "Admin not found" });
-    if (admin.role !== "admin") return res.status(403).json({ message: "Admin only" });
+    const adminData = serializeUser(admin);
+    if (adminData.role !== "admin") return res.status(403).json({ message: "Admin only" });
 
-    const allowed = [
-      "name",
-      "phone",
-      "dob",
-      "gender",
-      "city",
-      "state",
-      "nationality",
-      "addressLine",
-      "postalCode",
-      "profileImageUrl",
-      "profileImageFileName",
-      "bio",
-      "skills",
-    ];
-
-    const update = {};
-    for (const key of allowed) {
-      if (req.body[key] !== undefined) update[key] = req.body[key];
-    }
-
-    if (req.body.email && req.body.email !== admin.email) {
+    if (req.body.email && req.body.email !== adminData.email) {
       return res.status(400).json({ message: "Email cannot be changed" });
     }
 
-    await admin.update(update);
+    const updated = await updateUserWithRelations(req.user._id, {
+      name: req.body.name,
+      phone: req.body.phone,
+      dob: req.body.dob,
+      gender: req.body.gender,
+      city: req.body.city,
+      state: req.body.state,
+      nationality: req.body.nationality,
+      addressLine: req.body.addressLine,
+      postalCode: req.body.postalCode,
+      profileImageUrl: req.body.profileImageUrl,
+      profileImageFileName: req.body.profileImageFileName,
+      bio: req.body.bio,
+      skills: req.body.skills,
+    });
 
-    const updated = await User.findByPk(adminId, { attributes: { exclude: ["password"] } });
-    res.json({ message: "Profile updated", user: toPublicUser(updated) });
+    res.json({ message: "Profile updated", user: serializeUser(updated) });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -420,8 +347,12 @@ const changeAdminPassword = async (req, res) => {
     }
 
     const admin = await User.findByPk(adminId);
+    const adminWithRole = await findUserByPkWithRelations(adminId);
+
     if (!admin) return res.status(404).json({ message: "Admin not found" });
-    if (admin.role !== "admin") return res.status(403).json({ message: "Admin only" });
+    if (!adminWithRole) return res.status(404).json({ message: "Admin not found" });
+    const adminData = serializeUser(adminWithRole);
+    if (adminData.role !== "admin") return res.status(403).json({ message: "Admin only" });
 
     const ok = await bcrypt.compare(currentPassword, admin.password);
     if (!ok) return res.status(400).json({ message: "Current password is incorrect" });

@@ -2,6 +2,11 @@ const { Op } = require("sequelize");
 const Upload = require("../models/Upload");
 const FileShare = require("../models/FileShare");
 const User = require("../models/User");
+const {
+  buildRoleInclude,
+  serializeUser,
+  findAllUsersWithRelations,
+} = require("../services/userService");
 
 const isUUID = (id) =>
   typeof id === "string" &&
@@ -121,17 +126,12 @@ const getFileShare = async (req, res) => {
 
     const ids = Array.isArray(s.sharedWith) ? s.sharedWith : [];
     const sharedWithUsers = ids.length
-      ? await User.findAll({
+      ? await findAllUsersWithRelations({
           where: { id: { [Op.in]: ids } },
-          attributes: ["id", "name", "email", "role", "professional"],
         })
       : [];
 
-    s.sharedWith = sharedWithUsers.map((u) => {
-      const o = u.toJSON();
-      o._id = o.id;
-      return o;
-    });
+    s.sharedWith = sharedWithUsers.map((user) => serializeUser(user));
 
     if (share.sharedBy) {
       s.sharedBy = { ...share.sharedBy.toJSON(), _id: share.sharedBy.id };
@@ -164,18 +164,13 @@ const unshareFile = async (req, res) => {
 ================================ */
 const listPeople = async (req, res) => {
   try {
-    const users = await User.findAll({
-      where: { role: { [Op.in]: ["employee", "manager"] } },
-      attributes: ["id", "name", "email", "role", "professional"],
+    const users = await findAllUsersWithRelations({
+      roleNames: ["employee", "manager"],
       order: [["name", "ASC"]],
     });
 
     res.json({
-      users: users.map((u) => {
-        const o = u.toJSON();
-        o._id = o.id;
-        return o;
-      }),
+      users: users.map((user) => serializeUser(user)),
     });
   } catch (err) {
     res.status(500).json({ message: err.message });

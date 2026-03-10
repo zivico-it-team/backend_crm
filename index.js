@@ -10,6 +10,7 @@ const swaggerUi = require("swagger-ui-express");
 
 // ✅ 2) Now import modules that depend on env
 const { connectDB } = require("./src/config/db");
+require("./src/models");
 const seedAdmin = require("./src/config/seedAdmin");
 const swaggerSpec = require("./src/config/swagger");
 
@@ -21,9 +22,6 @@ console.log("MYSQL_USER =", process.env.MYSQL_USER);
 console.log("MYSQL_DB   =", process.env.MYSQL_DB);
 
 // ✅ 3) Connect DB then seed
-connectDB();
-seedAdmin();
-
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",

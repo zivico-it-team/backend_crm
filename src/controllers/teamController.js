@@ -1,7 +1,11 @@
 const { Op } = require("sequelize");
-const User = require("../models/User");
 const Attendance = require("../models/Attendance");
 const Leave = require("../models/Leave");
+const {
+  serializeUser,
+  findAllUsersWithRelations,
+  countUsersWithRole,
+} = require("../services/userService");
 
 const getDateKey = (d = new Date()) => {
   const yyyy = d.getFullYear();
@@ -10,20 +14,12 @@ const getDateKey = (d = new Date()) => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
-const toUserJson = (u) => {
-  const o = typeof u.toJSON === "function" ? u.toJSON() : u;
-  o._id = o.id;
-  delete o.password;
-  return o;
-};
-
-// GET /api/team/stats
 const teamStats = async (req, res) => {
   try {
     const today = new Date();
     const dateKey = getDateKey(today);
 
-    const totalMembers = await User.count({ where: { role: "employee" } });
+    const totalMembers = await countUsersWithRole("employee");
 
     const activeAttendances = await Attendance.findAll({
       where: {
@@ -36,7 +32,7 @@ const teamStats = async (req, res) => {
     const activeIds = [...new Set(activeAttendances.map((a) => a.userId))];
 
     const activeNow = activeIds.length
-      ? await User.count({ where: { role: "employee", id: { [Op.in]: activeIds } } })
+      ? await countUsersWithRole("employee", { id: { [Op.in]: activeIds } })
       : 0;
 
     const onLeaveLeaves = await Leave.findAll({
@@ -50,22 +46,19 @@ const teamStats = async (req, res) => {
     const onLeaveIds = [...new Set(onLeaveLeaves.map((l) => l.userId))];
 
     const onLeave = onLeaveIds.length
-      ? await User.count({ where: { role: "employee", id: { [Op.in]: onLeaveIds } } })
+      ? await countUsersWithRole("employee", { id: { [Op.in]: onLeaveIds } })
       : 0;
 
-    // New joiners = professional.joiningDate last 30 days (JS filter because joiningDate is inside JSON)
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const employees = await User.findAll({
-      where: { role: "employee" },
-      attributes: ["id", "professional"],
-    });
-
-    const newJoiners = employees.filter((u) => {
-      const jd = u.professional?.joiningDate ? new Date(u.professional.joiningDate) : null;
-      return jd && !Number.isNaN(jd.getTime()) && jd >= thirtyDaysAgo;
-    }).length;
+    const employees = await findAllUsersWithRelations({ roleNames: "employee" });
+    const newJoiners = employees
+      .map((user) => serializeUser(user))
+      .filter((user) => {
+        const joiningDate = user.professional?.joiningDate ? new Date(user.professional.joiningDate) : null;
+        return joiningDate && !Number.isNaN(joiningDate.getTime()) && joiningDate >= thirtyDaysAgo;
+      }).length;
 
     res.json({ totalMembers, activeNow, onLeave, newJoiners });
   } catch (err) {
@@ -73,7 +66,6 @@ const teamStats = async (req, res) => {
   }
 };
 
-// GET /api/team/members
 const teamMembers = async (req, res) => {
   try {
     const {
@@ -91,35 +83,29 @@ const teamMembers = async (req, res) => {
     const p = Math.max(1, Number(page));
     const l = Math.min(100, Math.max(1, Number(limit)));
 
-    const allEmployees = await User.findAll({
-      where: { role: "employee" },
-      attributes: { exclude: ["password"] },
-    });
+    const allEmployees = await findAllUsersWithRelations({ roleNames: "employee" });
+    let list = allEmployees.map((user) => serializeUser(user));
 
-    let list = allEmployees.map((u) => toUserJson(u));
-
-    // team filter
     if (team) {
-      list = list.filter((u) => {
-        const t1 = u?.professional?.teamName || "";
-        const t2 = u?.professional?.department || "";
-        return t1 === team || t2 === team;
+      list = list.filter((user) => {
+        const teamName = user?.professional?.teamName || "";
+        const department = user?.professional?.department || "";
+        return teamName === team || department === team;
       });
     }
 
-    // search filter
     if (search.trim()) {
-      const s = search.trim().toLowerCase();
-      list = list.filter((u) => {
-        const pro = u.professional || {};
-        const blob = `${u.name} ${u.email} ${u.userName} ${pro.designation || ""} ${pro.employeeId || ""} ${
-          pro.workLocation || ""
-        }`.toLowerCase();
-        return blob.includes(s);
+      const needle = search.trim().toLowerCase();
+      list = list.filter((user) => {
+        const professional = user.professional || {};
+        const blob = `${user.name} ${user.email} ${user.userName} ${professional.designation || ""} ${
+          professional.employeeId || ""
+        } ${professional.workLocation || ""}`.toLowerCase();
+
+        return blob.includes(needle);
       });
     }
 
-    // status tabs
     if (status === "active") {
       const activeAttendances = await Attendance.findAll({
         where: {
@@ -129,8 +115,8 @@ const teamMembers = async (req, res) => {
         },
         attributes: ["userId"],
       });
-      const activeIds = new Set(activeAttendances.map((a) => a.userId));
-      list = list.filter((u) => activeIds.has(u.id));
+      const activeIds = new Set(activeAttendances.map((attendance) => attendance.userId));
+      list = list.filter((user) => activeIds.has(user.id));
     }
 
     if (status === "onLeave") {
@@ -142,24 +128,26 @@ const teamMembers = async (req, res) => {
         },
         attributes: ["userId"],
       });
-      const onLeaveIds = new Set(onLeaveLeaves.map((l) => l.userId));
-      list = list.filter((u) => onLeaveIds.has(u.id));
+      const onLeaveIds = new Set(onLeaveLeaves.map((leave) => leave.userId));
+      list = list.filter((user) => onLeaveIds.has(user.id));
     }
 
     if (status === "remote") {
-      list = list.filter((u) => String(u?.professional?.workLocation || "").toLowerCase().includes("remote"));
+      list = list.filter((user) =>
+        String(user?.professional?.workLocation || "").toLowerCase().includes("remote")
+      );
     }
 
-    // sorting
-    if (sort === "name") list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    else if (sort === "join") {
-      list.sort((a, b) => {
-        const ad = a.professional?.joiningDate ? new Date(a.professional.joiningDate).getTime() : 0;
-        const bd = b.professional?.joiningDate ? new Date(b.professional.joiningDate).getTime() : 0;
-        return bd - ad;
+    if (sort === "name") {
+      list.sort((left, right) => String(left.name).localeCompare(String(right.name)));
+    } else if (sort === "join") {
+      list.sort((left, right) => {
+        const leftDate = left.professional?.joiningDate ? new Date(left.professional.joiningDate).getTime() : 0;
+        const rightDate = right.professional?.joiningDate ? new Date(right.professional.joiningDate).getTime() : 0;
+        return rightDate - leftDate;
       });
     } else {
-      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      list.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
     }
 
     const total = list.length;
@@ -172,37 +160,41 @@ const teamMembers = async (req, res) => {
   }
 };
 
-// GET /api/team/managers
 const managersList = async (req, res) => {
   try {
-    const managers = await User.findAll({
-      where: { role: "manager" },
-      attributes: ["id", "name", "email", "userName"],
+    const managers = await findAllUsersWithRelations({
+      roleNames: "manager",
       order: [["name", "ASC"]],
     });
 
-    res.json(managers.map((m) => ({ ...m.toJSON(), _id: m.id })));
+    res.json(
+      managers.map((manager) => {
+        const user = serializeUser(manager);
+        return {
+          id: user.id,
+          _id: user.id,
+          name: user.name,
+          email: user.email,
+          userName: user.userName,
+        };
+      })
+    );
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// GET /api/team/teams
 const teamsList = async (req, res) => {
   try {
-    const employees = await User.findAll({
-      where: { role: "employee" },
-      attributes: ["professional"],
-    });
+    const employees = await findAllUsersWithRelations({ roleNames: "employee" });
+    const teamNames = new Set();
 
-    const set = new Set();
-    for (const e of employees) {
-      const p = e.professional || {};
-      if (p.teamName) set.add(p.teamName);
-      if (p.department) set.add(p.department);
+    for (const employee of employees.map((user) => serializeUser(user))) {
+      if (employee.professional?.teamName) teamNames.add(employee.professional.teamName);
+      if (employee.professional?.department) teamNames.add(employee.professional.department);
     }
 
-    res.json([...set]);
+    res.json([...teamNames]);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

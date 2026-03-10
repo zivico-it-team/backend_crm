@@ -1,28 +1,42 @@
-const User = require("../models/User");
 const LeaderboardPerformance = require("../models/LeaderboardPerformance");
+const {
+  serializeUser,
+  findOneUserWithRelations,
+  findAllUsersWithRelations,
+} = require("../services/userService");
 
 const toNumber = (value, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 };
 
-const toNonNegativeInt = (value, fallback = 0) => {
-  return Math.max(0, Math.trunc(toNumber(value, fallback)));
-};
+const toNonNegativeInt = (value, fallback = 0) => Math.max(0, Math.trunc(toNumber(value, fallback)));
 
 const getProgress = (achieved, target) => {
-  if (!target) {
-    return 0;
-  }
+  if (!target) return 0;
   return Math.round((achieved / target) * 100);
 };
+
+const toLeaderboardItem = (employee, performance = {}) => ({
+  employeeId: employee.id,
+  _id: employee.id,
+  id: employee.id,
+  name: employee.name || "Employee",
+  email: employee.email || "",
+  employeeCode: employee?.professional?.employeeId || "",
+  designation: employee?.professional?.designation || "",
+  target: toNonNegativeInt(performance.target, 0),
+  achieved: toNonNegativeInt(performance.achieved, 0),
+  progress: getProgress(toNonNegativeInt(performance.achieved, 0), toNonNegativeInt(performance.target, 0)),
+  updatedBy: performance.updatedBy || "",
+  updatedAt: performance.updatedAt || null,
+});
 
 const listLeaderboard = async (_req, res) => {
   try {
     const [employees, performances] = await Promise.all([
-      User.findAll({
-        where: { role: "employee" },
-        attributes: ["id", "name", "email", "professional"],
+      findAllUsersWithRelations({
+        roleNames: "employee",
         order: [["name", "ASC"]],
       }),
       LeaderboardPerformance.findAll({
@@ -30,41 +44,13 @@ const listLeaderboard = async (_req, res) => {
       }),
     ]);
 
-    const perfMap = new Map(
-      performances.map((perf) => [String(perf.employeeId), perf.toJSON()])
-    );
+    const perfMap = new Map(performances.map((perf) => [String(perf.employeeId), perf.toJSON()]));
 
-    const items = employees.map((employee) => {
-      const e = employee.toJSON();
-      const perf = perfMap.get(String(e.id)) || {};
-      const target = toNonNegativeInt(perf.target, 0);
-      const achieved = toNonNegativeInt(perf.achieved, 0);
-      const progress = getProgress(achieved, target);
-
-      return {
-        employeeId: e.id,
-        _id: e.id,
-        id: e.id,
-        name: e.name || "Employee",
-        email: e.email || "",
-        employeeCode: e?.professional?.employeeId || "",
-        designation: e?.professional?.designation || "",
-        target,
-        achieved,
-        progress,
-        updatedBy: perf.updatedBy || "",
-        updatedAt: perf.updatedAt || null,
-      };
-    });
-
-    const ranked = items
+    const ranked = employees
+      .map((employee) => toLeaderboardItem(serializeUser(employee), perfMap.get(String(employee.id)) || {}))
       .sort((left, right) => {
-        if (right.progress !== left.progress) {
-          return right.progress - left.progress;
-        }
-        if (right.achieved !== left.achieved) {
-          return right.achieved - left.achieved;
-        }
+        if (right.progress !== left.progress) return right.progress - left.progress;
+        if (right.achieved !== left.achieved) return right.achieved - left.achieved;
         return String(left.name || "").localeCompare(String(right.name || ""));
       })
       .map((item, index) => ({ ...item, position: index + 1 }));
@@ -82,9 +68,7 @@ const listLeaderboard = async (_req, res) => {
       },
     });
   } catch (err) {
-    return res
-      .status(500)
-      .json({ message: err.message || "Failed to load leaderboard data" });
+    return res.status(500).json({ message: err.message || "Failed to load leaderboard data" });
   }
 };
 
@@ -99,17 +83,15 @@ const updatePerformance = async (req, res) => {
     }
 
     if (!hasTarget && !hasAchieved) {
-      return res
-        .status(400)
-        .json({ message: "target or achieved value is required" });
+      return res.status(400).json({ message: "target or achieved value is required" });
     }
 
-    const employee = await User.findOne({
-      where: { id: employeeId, role: "employee" },
-      attributes: ["id", "name", "email", "professional"],
+    const employeeRecord = await findOneUserWithRelations({
+      where: { id: employeeId },
+      roleNames: "employee",
     });
 
-    if (!employee) {
+    if (!employeeRecord) {
       return res.status(404).json({ message: "Employee not found" });
     }
 
@@ -137,39 +119,16 @@ const updatePerformance = async (req, res) => {
     }
 
     performance.updatedBy =
-      String(
-        req.body?.updatedBy ||
-          req.user?.name ||
-          req.user?.userName ||
-          req.user?.email ||
-          "System"
-      ).trim() || "System";
+      String(req.body?.updatedBy || req.user?.name || req.user?.userName || req.user?.email || "System").trim() ||
+      "System";
 
     await performance.save();
 
-    const p = performance.toJSON();
-    const e = employee.toJSON();
-
     return res.json({
-      item: {
-        employeeId: e.id,
-        _id: e.id,
-        id: e.id,
-        name: e.name || "Employee",
-        email: e.email || "",
-        employeeCode: e?.professional?.employeeId || "",
-        designation: e?.professional?.designation || "",
-        target: p.target,
-        achieved: p.achieved,
-        progress: getProgress(p.achieved, p.target),
-        updatedBy: p.updatedBy || "",
-        updatedAt: p.updatedAt || null,
-      },
+      item: toLeaderboardItem(serializeUser(employeeRecord), performance.toJSON()),
     });
   } catch (err) {
-    return res
-      .status(500)
-      .json({ message: err.message || "Failed to update leaderboard data" });
+    return res.status(500).json({ message: err.message || "Failed to update leaderboard data" });
   }
 };
 

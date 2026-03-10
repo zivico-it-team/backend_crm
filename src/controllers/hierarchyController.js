@@ -1,48 +1,43 @@
-const User = require("../models/User");
+const { serializeUser, findAllUsersWithRelations } = require("../services/userService");
 
-const pickUser = (u) => ({
-  _id: u.id,
-  id: u.id,
-  name: u.name,
-  email: u.email,
-  phone: u.phone || "",
-  role: u.role,
-  designation: u?.professional?.designation || "",
-  teamName: u?.professional?.teamName || "",
-  department: u?.professional?.department || "",
-  reportingManager: u?.professional?.reportingManager || "",
-  profileImageUrl: u.profileImageUrl || "",
+const pickUser = (user) => ({
+  _id: user.id,
+  id: user.id,
+  name: user.name,
+  email: user.email,
+  phone: user.phone || "",
+  role: user.role,
+  designation: user?.professional?.designation || "",
+  teamName: user?.professional?.teamName || "",
+  department: user?.professional?.department || "",
+  reportingManager: user?.professional?.reportingManager || "",
+  profileImageUrl: user.profileImageUrl || "",
 });
 
-const d = (u) => String(u?.professional?.designation || "").toLowerCase();
+const designationValue = (user) => String(user?.professional?.designation || "").toLowerCase();
 
-const isCEO = (u) => d(u).includes("ceo") || u.role === "admin";
-const isHRManager = (u) => d(u).includes("hr") && d(u).includes("manager");
-const isManager = (u) => d(u).includes("manager") && !d(u).includes("hr") && !d(u).includes("ceo");
+const isCEO = (user) => designationValue(user).includes("ceo") || user.role === "admin";
+const isHRManager = (user) =>
+  designationValue(user).includes("hr") && designationValue(user).includes("manager");
+const isManager = (user) =>
+  designationValue(user).includes("manager") &&
+  !designationValue(user).includes("hr") &&
+  !designationValue(user).includes("ceo");
 
-// ✅ GET /api/hierarchy/overview
 const hierarchyOverview = async (req, res) => {
   try {
-    const users = (await User.findAll({
-      attributes: ["id", "name", "email", "phone", "role", "professional", "profileImageUrl"],
-      order: [["name", "ASC"]],
-    })).map((x) => x.toJSON());
+    const users = (await findAllUsersWithRelations({ order: [["name", "ASC"]] })).map((user) => serializeUser(user));
 
-    // ---- Top roles (for employee view only) ----
     const ceo = users.find(isCEO) || null;
     const hrManager = users.find(isHRManager) || null;
-
-    // managers list
-    const managers = users.filter((u) => u.role === "manager" || isManager(u));
-
-    // group employees by teamName
-    const employees = users.filter((u) => u.role === "employee");
+    const managers = users.filter((user) => user.role === "manager" || isManager(user));
+    const employees = users.filter((user) => user.role === "employee");
 
     const teamsMap = new Map();
-    for (const e of employees) {
-      const teamName = e?.professional?.teamName || e?.professional?.department || "Unassigned";
+    for (const employee of employees) {
+      const teamName = employee?.professional?.teamName || employee?.professional?.department || "Unassigned";
       if (!teamsMap.has(teamName)) teamsMap.set(teamName, []);
-      teamsMap.get(teamName).push(pickUser(e));
+      teamsMap.get(teamName).push(pickUser(employee));
     }
 
     const managerByTeamName = new Map();
@@ -60,6 +55,7 @@ const hierarchyOverview = async (req, res) => {
         const teamKey = String(teamName || "")
           .trim()
           .toLowerCase();
+
         return {
           teamName,
           members,
@@ -67,7 +63,7 @@ const hierarchyOverview = async (req, res) => {
           managedBy: managerByTeamName.get(teamKey) || "",
         };
       })
-      .sort((a, b) => a.teamName.localeCompare(b.teamName));
+      .sort((left, right) => left.teamName.localeCompare(right.teamName));
 
     const hierarchyLevels =
       1 +
@@ -76,7 +72,7 @@ const hierarchyOverview = async (req, res) => {
       (employees.length > 0 ? 1 : 0);
 
     const managementIds = new Set();
-    managers.forEach((u) => managementIds.add(u.id));
+    managers.forEach((user) => managementIds.add(user.id));
     if (ceo?.id) managementIds.add(ceo.id);
     if (hrManager?.id) managementIds.add(hrManager.id);
 
@@ -87,10 +83,7 @@ const hierarchyOverview = async (req, res) => {
       hierarchyLevels,
     };
 
-    // employee view gets cards too
-    const role = req.user?.role;
-
-    if (role === "employee") {
+    if (req.user?.role === "employee") {
       return res.json({
         view: "employee_full",
         cards: {
@@ -103,7 +96,6 @@ const hierarchyOverview = async (req, res) => {
       });
     }
 
-    // manager/admin: cards hidden, summary + teams visible
     return res.json({
       view: "management",
       cards: null,

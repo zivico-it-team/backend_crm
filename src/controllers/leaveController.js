@@ -1,6 +1,7 @@
 const { Op } = require("sequelize");
 const Leave = require("../models/Leave");
 const User = require("../models/User");
+const { buildRoleInclude, serializeUser } = require("../services/userService");
 
 const LEGACY_POLICY_TOTALS = {
   annual: 21,
@@ -252,13 +253,20 @@ const pendingLeaves = async (req, res) => {
   try {
     const leaves = await Leave.findAll({
       where: { status: "pending" },
-      include: [{ model: User, as: "user", attributes: ["id", "name", "email", "role"] }],
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "name", "email"],
+          include: [buildRoleInclude()],
+        },
+      ],
       order: [["createdAt", "DESC"]],
     });
 
     const out = leaves.map((l) => {
       const o = toLeaveJson(l);
-      if (l.user) o.user = { ...l.user.toJSON(), _id: l.user.id };
+      if (l.user) o.user = serializeUser(l.user);
       return o;
     });
 

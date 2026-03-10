@@ -15,11 +15,7 @@ const User = sequelize.define(
     name: { type: DataTypes.STRING(80), allowNull: false },
     email: { type: DataTypes.STRING(120), allowNull: false, unique: true },
 
-    role: {
-      type: DataTypes.ENUM("admin", "manager", "employee"),
-      allowNull: false,
-      defaultValue: "employee",
-    },
+    roleId: { type: DataTypes.UUID, allowNull: true },
 
     phone: { type: DataTypes.STRING(30), allowNull: true, defaultValue: "" },
     dob: { type: DataTypes.DATE, allowNull: true },
@@ -38,14 +34,11 @@ const User = sequelize.define(
     state: { type: DataTypes.STRING(60), allowNull: true, defaultValue: "" },
     postalCode: { type: DataTypes.STRING(20), allowNull: true, defaultValue: "" },
 
-    professional: { type: DataTypes.JSON, allowNull: true, defaultValue: {} },
-    bank: { type: DataTypes.JSON, allowNull: true, defaultValue: {} },
     documents: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
 
     profileImageUrl: { type: DataTypes.STRING(255), allowNull: true, defaultValue: "" },
     profileImageFileName: { type: DataTypes.STRING(255), allowNull: true, defaultValue: "" },
 
-    emergencyContact: { type: DataTypes.JSON, allowNull: true, defaultValue: {} },
   },
   {
     tableName: "users",
@@ -53,7 +46,7 @@ const User = sequelize.define(
     indexes: [
       { unique: true, fields: ["email"] },
       { unique: true, fields: ["userName"] },
-      { fields: ["role"] },
+      { fields: ["roleId"] },
     ],
   }
 );

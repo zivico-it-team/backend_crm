@@ -24,8 +24,14 @@ const connectDB = async () => {
     await sequelize.authenticate();
     console.log("MySQL connected successfully ✅");
 
-    // Create tables if not exist (dev-friendly)
-    await sequelize.sync();
+    const {
+      ensureNormalizedUserSchema,
+      seedRoles,
+      backfillNormalizedUserData,
+    } = require("../services/userService");
+    await ensureNormalizedUserSchema();
+    await seedRoles();
+    await backfillNormalizedUserData();
     console.log("MySQL tables synced ✅");
   } catch (error) {
     console.error("MySQL connection failed ❌", error);

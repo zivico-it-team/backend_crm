@@ -1,5 +1,5 @@
 const jwt = require("jsonwebtoken");
-const User = require("../models/User");
+const { findUserByPkWithRelations, serializeUser } = require("../services/userService");
 
 const protect = async (req, res, next) => {
   try {
@@ -12,19 +12,13 @@ const protect = async (req, res, next) => {
     const token = authHeader.split(" ")[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    const user = await User.findByPk(decoded.id, {
-      attributes: { exclude: ["password"] },
-    });
+    const user = await findUserByPkWithRelations(decoded.id);
 
     if (!user) {
       return res.status(401).json({ message: "User not found" });
     }
 
-    // keep backward compatibility with old Mongo _id usage
-    const u = user.toJSON();
-    u._id = u.id;
-
-    req.user = u;
+    req.user = serializeUser(user);
     next();
   } catch (err) {
     return res.status(401).json({ message: "Invalid token" });

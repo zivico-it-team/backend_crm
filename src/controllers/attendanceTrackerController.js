@@ -2,7 +2,7 @@ const { Op } = require("sequelize");
 const Attendance = require("../models/Attendance");
 const Activity = require("../models/Activity");
 const Leave = require("../models/Leave");
-const User = require("../models/User");
+const { serializeUser, findAllUsersWithRelations, findUserByPkWithRelations } = require("../services/userService");
 
 // helpers
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -27,13 +27,6 @@ const isWeekend = (year, month1to12, day) => {
 
 const daysInMonth = (year, month1to12) => new Date(year, month1to12, 0).getDate();
 
-const safeUser = (u) => {
-  const o = typeof u.toJSON === "function" ? u.toJSON() : u;
-  o._id = o.id;
-  delete o.password;
-  return o;
-};
-
 /**
  * GET /api/attendance-tracker/monthly?year=2026&month=2&search=
  */
@@ -53,11 +46,10 @@ const monthlyGrid = async (req, res) => {
     const todayKey = toDateKey(new Date());
 
     // fetch employees
-    const allEmployees = await User.findAll({
-      where: { role: "employee" },
-      attributes: ["id", "name", "email", "userName"],
+    const allEmployees = (await findAllUsersWithRelations({
+      roleNames: "employee",
       order: [["name", "ASC"]],
-    });
+    })).map((user) => serializeUser(user));
 
     const employees = search
       ? allEmployees.filter((u) => {
@@ -174,7 +166,7 @@ const dayDetails = async (req, res) => {
     const dk = toDateKey(dt);
 
     const [emp, att, acts, leave] = await Promise.all([
-      User.findByPk(userId, { attributes: ["id", "name", "email", "userName"] }),
+      findUserByPkWithRelations(userId),
       Attendance.findOne({ where: { userId, dateKey: dk }, attributes: ["checkInAt", "checkOutAt", "isLate"] }),
       Activity.findAll({
         where: { userId, dateKey: dk, type: { [Op.in]: ["tea_break", "lunch_break"] } },
@@ -196,9 +188,16 @@ const dayDetails = async (req, res) => {
 
     const tea = acts.find((a) => a.type === "tea_break") || null;
     const lunch = acts.find((a) => a.type === "lunch_break") || null;
+    const employee = serializeUser(emp);
 
     res.json({
-      employee: { ...emp.toJSON(), _id: emp.id },
+      employee: {
+        id: employee.id,
+        _id: employee.id,
+        name: employee.name,
+        email: employee.email,
+        userName: employee.userName,
+      },
       dateKey: dk,
       attendance: {
         checkInAt: att?.checkInAt || null,

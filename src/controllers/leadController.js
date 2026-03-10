@@ -2,7 +2,7 @@ const { Op } = require("sequelize");
 
 const Lead = require("../models/Lead");
 const LeadTimeline = require("../models/LeadTimeline");
-const User = require("../models/User");
+const { serializeUser, findAllUsersWithRelations } = require("../services/userService");
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const toInt = (value, fallback) => {
@@ -409,21 +409,13 @@ const deleteLead = async (req, res) => {
 
 const getAssignEmployees = async (_req, res) => {
   try {
-    const employees = await User.findAll({
-      where: { role: "employee" },
-      attributes: ["id", "name", "email", "userName", "professional"],
+    const employees = await findAllUsersWithRelations({
+      roleNames: "employee",
       order: [["name", "ASC"]],
     });
 
     return res.json({
-      employees: employees.map((employee) => {
-        const obj = employee.toJSON();
-        return {
-          ...obj,
-          _id: obj.id,
-          id: obj.id,
-        };
-      }),
+      employees: employees.map((employee) => serializeUser(employee)),
     });
   } catch (err) {
     return res.status(500).json({ message: err.message || "Failed to load employees" });

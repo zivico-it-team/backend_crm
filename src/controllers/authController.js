@@ -2,10 +2,14 @@ const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 const { Op } = require("sequelize");
 const generateToken = require("../utils/generateToken");
+const {
+  serializeUser,
+  createUserWithRelations,
+  findOneUserWithRelations,
+} = require("../services/userService");
 
 const toSessionUser = (user) => {
-  const u = typeof user.toJSON === "function" ? user.toJSON() : { ...user };
-  delete u.password;
+  const u = serializeUser(user);
 
   return {
     ...u,
@@ -18,7 +22,10 @@ const login = async (req, res) => {
   try {
     const { userName, password } = req.body;
 
-    const user = await User.findOne({ where: { userName } });
+    const user = await findOneUserWithRelations({
+      where: { userName },
+      includePassword: true,
+    });
     if (!user) return res.status(401).json({ message: "Invalid Username" });
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -57,7 +64,7 @@ const register = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = await User.create({
+    const user = await createUserWithRelations({
       name: String(name).trim(),
       email: normalizedEmail,
       userName: resolvedUserName,

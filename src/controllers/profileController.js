@@ -1,4 +1,8 @@
-const User = require("../models/User");
+const {
+  serializeUser,
+  findUserByPkWithRelations,
+  updateUserWithRelations,
+} = require("../services/userService");
 
 // helper: allowed fields only (security)
 const pick = (obj, keys) =>
@@ -10,15 +14,10 @@ const pick = (obj, keys) =>
 // GET /api/profile/me
 exports.getMyProfile = async (req, res, next) => {
   try {
-    const user = await User.findByPk(req.user.id || req.user._id, {
-      attributes: { exclude: ["password"] },
-    });
+    const user = await findUserByPkWithRelations(req.user.id || req.user._id);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const u = user.toJSON();
-    u._id = u.id;
-
-    return res.json({ success: true, data: u });
+    return res.json({ success: true, data: serializeUser(user) });
   } catch (err) {
     next(err);
   }
@@ -79,16 +78,12 @@ exports.updateMyProfile = async (req, res, next) => {
     if (updateDoc.dob) updateDoc.dob = new Date(updateDoc.dob);
     if (updateDoc?.professional?.joiningDate) updateDoc.professional.joiningDate = new Date(updateDoc.professional.joiningDate);
 
-    const user = await User.findByPk(userId);
+    const user = await findUserByPkWithRelations(userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    await user.update(updateDoc);
+    const updated = await updateUserWithRelations(userId, updateDoc);
 
-    const updated = await User.findByPk(userId, { attributes: { exclude: ["password"] } });
-    const u = updated.toJSON();
-    u._id = u.id;
-
-    return res.json({ success: true, message: "Profile updated", data: u });
+    return res.json({ success: true, message: "Profile updated", data: serializeUser(updated) });
   } catch (err) {
     next(err);
   }

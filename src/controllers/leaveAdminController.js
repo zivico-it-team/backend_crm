@@ -1,6 +1,7 @@
 const { Op } = require("sequelize");
 const Leave = require("../models/Leave");
 const User = require("../models/User");
+const { buildRoleInclude, serializeUser } = require("../services/userService");
 
 const toLeaveJson = (l) => {
   const o = typeof l.toJSON === "function" ? l.toJSON() : l;
@@ -40,7 +41,14 @@ const adminLeaveList = async (req, res) => {
 
     const { count: total, rows } = await Leave.findAndCountAll({
       where,
-      include: [{ model: User, as: "user", attributes: ["id", "name", "email", "role"] }],
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "name", "email"],
+          include: [buildRoleInclude()],
+        },
+      ],
       order: [["createdAt", "DESC"]],
       offset,
       limit: l,
@@ -48,7 +56,7 @@ const adminLeaveList = async (req, res) => {
 
     const leaves = rows.map((x) => {
       const o = toLeaveJson(x);
-      if (x.user) o.user = { ...x.user.toJSON(), _id: x.user.id };
+      if (x.user) o.user = serializeUser(x.user);
       return o;
     });
 
